@@ -4,7 +4,7 @@ import torch.optim as optim
 from torch_geometric.data import Data
 import torch.nn.functional as F
 import numpy as np
-from model import GNNEmbeds, TransformerTSP, Hybrid
+from unbatched.model import GNNEmbeds, TransformerTSP, Hybrid
 
 # Ensure the model and data are on GPU if available
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
