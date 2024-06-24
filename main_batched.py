@@ -1,4 +1,4 @@
-from data import generate_tsp_instances
+from data import generate_tsp_instances_validation
 from train_batched import train_model
 from plot import plot_tsp_graph
 from torch_geometric.data import Data, Batch
@@ -6,53 +6,53 @@ import torch.nn.functional as F
 import torch
 import numpy as np
 from utils import decode_tsp_tour, calculate_total_distance
-from data import solve_tsp_exact
+from data import solve_tsp_exact, create_batches
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Generate TSP Instances
 num_instances = 1000
-num_cities = 30
-batch_size = 1
-tsp_instances = generate_tsp_instances(num_instances, num_cities)
-
+num_cities = 10
+batch_size = 32
+tsp_instances = generate_tsp_instances_validation(num_instances, num_cities)
 print("Created TSP instances, starting training")
 
+batches = create_batches(tsp_instances, batch_size)
+
 # Train Hybrid Model
-num_epochs = 15
+num_epochs = 8
 trained_model = train_model(num_epochs, tsp_instances, num_cities, batch_size)
 
-print("Training complete")
-trained_model.eval()
+# Define function to decode the model's output and plot the paths
+def visualize_model_vs_optimal(model, tsp_instance):
+    coordinates, distances, optimal_tour, optimal_distance = tsp_instance
 
-# Plot the result
-coordinates, distances = tsp_instances[0]
-edge_index = np.array(np.meshgrid(range(len(coordinates)), range(len(coordinates)))).reshape(2, -1)
-mask = edge_index[0] != edge_index[1]
-edge_index = edge_index[:, mask]
-edge_index = torch.tensor(edge_index, dtype=torch.long).to(device)
+    edge_index = np.array(np.meshgrid(range(num_cities), range(num_cities))).reshape(2, -1)
+    mask = edge_index[0] != edge_index[1]
+    edge_index = edge_index[:, mask]
+    edge_index = torch.tensor(edge_index, dtype=torch.long).to(device)
 
-x = torch.tensor(coordinates, dtype=torch.float).to(device)
-distances_tensor = torch.tensor(distances, dtype=torch.float).to(device)
-data = Data(x=x, edge_index=edge_index).to(device)
+    x = torch.tensor(coordinates, dtype=torch.float).to(device)
+    row, col = edge_index
+    edge_attr = distances[row, col].reshape(-1)
+    edge_attr = torch.tensor(edge_attr, dtype=torch.float).to(device).unsqueeze(-1)
 
-# Convert single instance to batch
-data_list = [data]
-batch_data = Batch.from_data_list(data_list).to(device)
+    data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr).to(device)
+    data = Batch.from_data_list([data]).to(device)
 
-# Get model output
-output = trained_model(batch_data)
+    model.eval()
+    with torch.no_grad():
+        output = model(data, [optimal_tour])
 
-# Decode the TSP tour
-predicted_tour = decode_tsp_tour(output[0], num_cities)
-predicted_tour = predicted_tour[0]
-print(f"Predicted tour: {predicted_tour}")
-total_distance = calculate_total_distance(predicted_tour, coordinates)
-print(f"Total distance of the predicted tour: {total_distance}")
-# Plot the TSP graph with the predicted tour
-plot_tsp_graph(coordinates, distances, predicted_tour)
+    predicted_tour = decode_tsp_tour(output, num_cities)
+    print(calculate_total_distance(predicted_tour, coordinates))
+    print(optimal_distance)
+    
+    # Plot optimal and model's predicted tours
+    plot_tsp_graph(coordinates, distances, optimal_tour)
+    plot_tsp_graph(coordinates, distances, predicted_tour)
 
-optimalT, optimalD = solve_tsp_exact(distances)
-plot_tsp_graph(coordinates, distances, optimalT)
-print(f"distance optimal: {optimalD}")
-print(f"tour optimal: {optimalT}")
+# Select an instance from the validation set for visualization
+validation_instance = tsp_instances[0]
+
+visualize_model_vs_optimal(trained_model, validation_instance)

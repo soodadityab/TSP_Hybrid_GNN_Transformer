@@ -1,8 +1,24 @@
 import numpy as np
+from sklearn.utils import shuffle  # Add this import
+
+
+
+def normalize_coordinates(coordinates):
+    coordinates = np.array(coordinates)
+    min_val = coordinates.min(axis=0)
+    max_val = coordinates.max(axis=0)
+    normalized = (coordinates - min_val) / (max_val - min_val + 1e-8)  # Add small epsilon to avoid division by zero
+    return normalized
 
 def generate_tsp_instance(num_cities):
     coordinates = np.random.rand(num_cities, 2)
+    # print(f"not normalized {coordinates}")
+    # distances = np.sqrt(((coordinates[:, None, :] - coordinates[None, :, :]) ** 2).sum(-1))
+    # print(f"not normalized distances: {distances}")
+    coordinates = normalize_coordinates(coordinates)
+    # print(f"normalized: {coordinates}")
     distances = np.sqrt(((coordinates[:, None, :] - coordinates[None, :, :]) ** 2).sum(-1))
+    # print(f"normalized distances: {distances}")
     return coordinates, distances
 
 def generate_tsp_instances(num_instances, num_cities):
@@ -58,4 +74,4 @@ def generate_tsp_instances_validation(num_instances, num_cities):
     coordinates, distances = generate_tsp_instance(num_cities)
     optimal_tour, optimal_distance = solve_tsp_exact(distances.copy())
     instances.append((coordinates, distances, optimal_tour, optimal_distance))
-  return instances
+  return shuffle(instances)
