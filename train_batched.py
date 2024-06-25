@@ -4,7 +4,7 @@ import torch.optim as optim
 from torch_geometric.data import Data, Batch
 import torch.nn.functional as F
 import numpy as np
-from model_batched import GNNEmbeds, TransformerTSP, Hybrid
+from model_AR import GNNEmbeds, TransformerTSP, Hybrid
 import torch.optim.lr_scheduler as lr_scheduler
 from data import create_batches
 
@@ -17,43 +17,78 @@ def save_model(model, path):
 
 save_model_path = 'trained_tsp_model.pth'
 
-def tsp_loss(output, distances, alpha=3.0, beta=1.0):
+def tsp_loss(pred_probs, optimal_tours, distances, alpha=1.0, beta=1.0):
     """
-    Calculates the TSP loss, minimizing distance traveled while penalizing revisited/omitted nodes.
-
+    Calculates the TSP loss, minimizing distance traveled while penalizing incorrect node order.
+    
     Args:
-        output (torch.Tensor): The model output of shape (batch_size, num_cities, num_cities),
-                               representing probabilities for each edge.
+        pred_probs (torch.Tensor): The model output of shape (batch_size, num_cities, num_cities),
+                                   representing probabilities for each edge.
+        optimal_tours (List[torch.Tensor]): List of optimal tours for each instance in the batch.
         distances (torch.Tensor): The distance matrix of shape (batch_size, num_cities, num_cities).
-        alpha (float, optional): Weight for the distance term. Defaults to 1.0.
-        beta (float, optional): Weight for the violation penalty term. Defaults to 1.0.
-
+        alpha (float): Weight for the distance term.
+        beta (float): Weight for the permutation penalty term.
+    
     Returns:
         torch.Tensor: The calculated loss.
     """
-    # print(f"output shape: {output.shape}")
-    # print(f"distances shape: {distances.shape}")
+    batch_size, num_cities, _ = pred_probs.shape
     
-    batch_size, num_cities, _ = output.shape
-    # 1. Distance Term: Minimize total tour length
+    # Distance Term: Minimize total tour length
+    distance_term = torch.sum(pred_probs * distances, dim=(1, 2))
     
-    distance_term = torch.sum(output * distances, dim=(1, 2))
-
-    # 2. Violation Penalty Term: Penalize revisited/omitted nodes
-    # 2.1. Revisited Nodes: Ensure each node is visited exactly once
-    visited = torch.matmul(output, torch.eye(num_cities, device=output.device))  # (batch_size, num_cities, num_cities)
-    visited_penalty = torch.sum(torch.abs(visited - torch.eye(num_cities, device=output.device)), dim=(1, 2))
-
-    # 2.2. Omitted Nodes: Penalize missing connections in the tour
-    connection_penalty = torch.sum(torch.abs(torch.sum(output, dim=2) - 1), dim=1) + \
-                         torch.sum(torch.abs(torch.sum(output, dim=1) - 1), dim=1)
-
-    # Combine terms and return loss
-    # print(f"distance term: {distance_term}")
-    # print(f"visit penalty: {visited_penalty}")
-    # print(f"connection_penalty: {connection_penalty}")
-    loss = alpha * distance_term + beta * (visited_penalty + connection_penalty)
+    # Permutation Penalty Term: Ensure the predicted tour matches the optimal tour
+    permutation_penalty = 0
+    for i in range(batch_size):
+        optimal_tour = optimal_tours[i]
+        optimal_tour_mask = torch.zeros(num_cities, num_cities, device=pred_probs.device)
+        for j in range(num_cities - 1):
+            optimal_tour_mask[optimal_tour[j], optimal_tour[j + 1]] = 1
+        optimal_tour_mask[optimal_tour[-1], optimal_tour[0]] = 1  # Closing the tour
+        permutation_penalty += F.binary_cross_entropy(pred_probs[i], optimal_tour_mask)
+    
+    permutation_penalty /= batch_size
+    
+    loss = alpha * distance_term + beta * permutation_penalty
     return loss.mean()
+
+# def tsp_loss(output, distances, alpha=2.0, beta=3.0):
+#     """
+#     Calculates the TSP loss, minimizing distance traveled while penalizing revisited/omitted nodes.
+
+#     Args:
+#         output (torch.Tensor): The model output of shape (batch_size, num_cities, num_cities),
+#                                representing probabilities for each edge.
+#         distances (torch.Tensor): The distance matrix of shape (batch_size, num_cities, num_cities).
+#         alpha (float, optional): Weight for the distance term. Defaults to 1.0.
+#         beta (float, optional): Weight for the violation penalty term. Defaults to 1.0.
+
+#     Returns:
+#         torch.Tensor: The calculated loss.
+#     """
+#     # print(f"output shape: {output.shape}")
+#     # print(f"distances shape: {distances.shape}")
+    
+#     batch_size, num_cities, _ = output.shape
+#     # 1. Distance Term: Minimize total tour length
+    
+#     distance_term = torch.sum(output * distances, dim=(1, 2))
+
+#     # 2. Violation Penalty Term: Penalize revisited/omitted nodes
+#     # 2.1. Revisited Nodes: Ensure each node is visited exactly once
+#     visited = torch.matmul(output, torch.eye(num_cities, device=output.device))  # (batch_size, num_cities, num_cities)
+#     visited_penalty = torch.sum(torch.abs(visited - torch.eye(num_cities, device=output.device)), dim=(1, 2))
+
+#     # 2.2. Omitted Nodes: Penalize missing connections in the tour
+#     connection_penalty = torch.sum(torch.abs(torch.sum(output, dim=2) - 1), dim=1) + \
+#                          torch.sum(torch.abs(torch.sum(output, dim=1) - 1), dim=1)
+
+#     # Combine terms and return loss
+#     # print(f"distance term: {distance_term}")
+#     # print(f"visit penalty: {visited_penalty}")
+#     # print(f"connection_penalty: {connection_penalty}")
+#     loss = alpha * distance_term + beta * (visited_penalty + connection_penalty)
+#     return loss.mean()
 
 
 def print_gradients(model):
@@ -86,6 +121,7 @@ def train_model(num_epochs, tsp_instances, num_cities, batch_size):
             batch_loss = 0
             data_list = []
             optimal_tours = []
+            distancesList = []
             for coordinates, distances, optimal_tour, optimal_distance in batch:
                 edge_index = np.array(np.meshgrid(range(num_cities), range(num_cities))).reshape(2, -1)
                 mask = edge_index[0] != edge_index[1]
@@ -101,18 +137,13 @@ def train_model(num_epochs, tsp_instances, num_cities, batch_size):
 
                 data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr).to(device)
                 data_list.append(data)
+                print(optimal_tour)
                 optimal_tours.append(optimal_tour)
+                distancesList.append(coordinates)
             
-            # print(f"data list is {data_list}")
-            # print(f"optimal_tour ois {optimal_tours}")
             batch_data = Batch.from_data_list(data_list).to(device)
-            # print(f"batch_data: {batch_data}")
-            # print(f"batch_data.x shape: {batch_data.x.shape}")
-            # print(f"batch_data.edge_index shape: {batch_data.edge_index.shape}")
-            # print(f"batch_data.edge_attr shape: {batch_data.edge_attr.shape}")
-            # print(f"batch_data.batch shape: {batch_data.batch.shape}")
-            # print(f"batch_data.ptr shape: {batch_data.ptr.shape}")
-            output = model(batch_data, optimal_tours)
+            # print(f"data batch is {batch_data}")
+            output = model(batch_data, optimal_tours, generate=False)
 
             # Convert edge attributes back to distance matrix shape
             distances_batch = []
@@ -122,9 +153,9 @@ def train_model(num_epochs, tsp_instances, num_cities, batch_size):
                 distances_matrix[data.edge_index[0], data.edge_index[1]] = data.edge_attr.view(-1)
                 distances_batch.append(distances_matrix)
             distances_batch = torch.stack(distances_batch)
+            # print(f"remade: {distances_batch}")
+            loss = tsp_loss(output, optimal_tours, distances_batch)
 
-            loss = tsp_loss(output, distances_batch)
-                
             batch_loss += loss
             batch_loss /= len(batch)
             batch_loss.backward()

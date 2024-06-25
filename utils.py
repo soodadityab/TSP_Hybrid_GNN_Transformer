@@ -13,7 +13,7 @@ def decode_tsp_tour(prob_matrix, num_cities):
     Returns:
         list: The decoded TSP tour as a list of city indices.
     """
-    prob_matrix = prob_matrix.squeeze(0)  # Remove the batch dimension
+    prob_matrix = prob_matrix.squeeze(0)
 
     tour = []
     visited = [False] * num_cities
@@ -23,7 +23,7 @@ def decode_tsp_tour(prob_matrix, num_cities):
     visited[current_node] = True
 
     for _ in range(1, num_cities):
-        prob_matrix[:, current_node] = -float('inf')  # Prevent revisiting the same node
+        prob_matrix[:, current_node] = -float('inf')
         next_node = torch.argmax(prob_matrix[current_node]).item()
         while visited[next_node]:
             prob_matrix[current_node, next_node] = -float('inf')
@@ -34,7 +34,7 @@ def decode_tsp_tour(prob_matrix, num_cities):
 
     return tour
 
-# THIS INTUITIVELY SEEM RIGHTS
+# THIS INTUITIVELY SEEM RIGHT
 # def decode_tsp_tour(tensor, training=True):
 #     print(tensor)
 #     n = tensor.shape[1]

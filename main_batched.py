@@ -11,16 +11,14 @@ from data import solve_tsp_exact, create_batches
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Generate TSP Instances
-num_instances = 1000
-num_cities = 10
-batch_size = 32
+num_instances = 10
+num_cities = 4
+batch_size = 3
 tsp_instances = generate_tsp_instances_validation(num_instances, num_cities)
 print("Created TSP instances, starting training")
 
-batches = create_batches(tsp_instances, batch_size)
-
 # Train Hybrid Model
-num_epochs = 8
+num_epochs = 3
 trained_model = train_model(num_epochs, tsp_instances, num_cities, batch_size)
 
 # Define function to decode the model's output and plot the paths
