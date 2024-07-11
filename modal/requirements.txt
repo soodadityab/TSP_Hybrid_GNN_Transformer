@@ -1,6 +1,0 @@
-torch
-torchvision
-torch-geometric
-numpy
-matplotlib
-modal
